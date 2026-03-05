@@ -313,7 +313,7 @@ function createPanel() {
     .setColor(0x5865f2)
     .setFooter({ text: '打刻データはNotionに自動保存されます' });
 
-  const row = new ActionRowBuilder().addComponents(
+  const row1 = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId('clock_in')
       .setLabel('🟢 出勤')
@@ -321,14 +321,16 @@ function createPanel() {
     new ButtonBuilder()
       .setCustomId('clock_out')
       .setLabel('🔴 退勤')
-      .setStyle(ButtonStyle.Danger),
+      .setStyle(ButtonStyle.Danger)
+  );
+  const row2 = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId('correct')
-      .setLabel('✏️ 修正')
+      .setLabel('修正')
       .setStyle(ButtonStyle.Secondary)
   );
 
-  return { embeds: [embed], components: [row] };
+  return { embeds: [embed], components: [row1, row2] };
 }
 
 /** 修正用モーダルを作成（mode: 'start' | 'end' | 'both'） */
@@ -528,7 +530,7 @@ discord.on('interactionCreate', async (interaction) => {
           }
           if (status === '退勤済' || status === '修正済') {
             await interaction.editReply({
-              content: '⚠️ 本日は既に出勤・退勤が記録されています。修正が必要な場合は「✏️ 修正」ボタンを使用してください。',
+              content: '⚠️ 本日は既に出勤・退勤が記録されています。修正が必要な場合は「修正」ボタンを使用してください。',
             });
             return;
           }
@@ -561,7 +563,7 @@ discord.on('interactionCreate', async (interaction) => {
         const status = existing.properties['ステータス'].select?.name;
         if (status === '退勤済' || status === '修正済') {
           await interaction.editReply({
-            content: '⚠️ 本日は既に退勤済みです。修正が必要な場合は「✏️ 修正」ボタンを使用してください。',
+            content: '⚠️ 本日は既に退勤済みです。修正が必要な場合は「修正」ボタンを使用してください。',
           });
           return;
         }
