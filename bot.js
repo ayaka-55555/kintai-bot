@@ -340,6 +340,43 @@ discord.on('interactionCreate', async (interaction) => {
   try {
     // ── ボタン操作 ──
     if (interaction.isButton()) {
+      // 修正ボタンはモーダルを表示（deferReplyするとモーダルが出せないため先に処理）
+      if (interaction.customId === 'correct') {
+        const modal = new ModalBuilder()
+          .setCustomId('correct_modal')
+          .setTitle('勤怠修正');
+
+        const dateInput = new TextInputBuilder()
+          .setCustomId('correct_date')
+          .setLabel('日付（YYYY-MM-DD）')
+          .setPlaceholder(toDateString(now()))
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true);
+
+        const startInput = new TextInputBuilder()
+          .setCustomId('correct_start')
+          .setLabel('出勤時刻（HH:MM）')
+          .setPlaceholder('09:00')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true);
+
+        const endInput = new TextInputBuilder()
+          .setCustomId('correct_end')
+          .setLabel('退勤時刻（HH:MM）')
+          .setPlaceholder('18:00')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true);
+
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(dateInput),
+          new ActionRowBuilder().addComponents(startInput),
+          new ActionRowBuilder().addComponents(endInput)
+        );
+
+        await interaction.showModal(modal);
+        return;
+      }
+
       await interaction.deferReply({ ephemeral: true });
 
       const discordId = interaction.user.id;
@@ -417,41 +454,6 @@ discord.on('interactionCreate', async (interaction) => {
           .setTimestamp();
 
         await interaction.editReply({ embeds: [embed] });
-
-      } else if (interaction.customId === 'correct') {
-        // 修正ボタン → モーダルを表示
-        const modal = new ModalBuilder()
-          .setCustomId('correct_modal')
-          .setTitle('勤怠修正');
-
-        const dateInput = new TextInputBuilder()
-          .setCustomId('correct_date')
-          .setLabel('日付（YYYY-MM-DD）')
-          .setPlaceholder(toDateString(now()))
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true);
-
-        const startInput = new TextInputBuilder()
-          .setCustomId('correct_start')
-          .setLabel('出勤時刻（HH:MM）')
-          .setPlaceholder('09:00')
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true);
-
-        const endInput = new TextInputBuilder()
-          .setCustomId('correct_end')
-          .setLabel('退勤時刻（HH:MM）')
-          .setPlaceholder('18:00')
-          .setStyle(TextInputStyle.Short)
-          .setRequired(true);
-
-        modal.addComponents(
-          new ActionRowBuilder().addComponents(dateInput),
-          new ActionRowBuilder().addComponents(startInput),
-          new ActionRowBuilder().addComponents(endInput)
-        );
-
-        await interaction.showModal(modal);
       }
     }
 
