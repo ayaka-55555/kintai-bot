@@ -69,12 +69,23 @@ function timeToMinutes(timeStr) {
   return h * 60 + m;
 }
 
-/** 勤務時間を計算（時間単位、小数第2位まで） */
-function calculateWorkHours(startTime, endTime) {
+/** 勤務時間を計算（休憩1時間を控除、分数で返す） */
+function calculateWorkMinutes(startTime, endTime) {
   const startMin = timeToMinutes(startTime);
   const endMin = timeToMinutes(endTime);
-  const diff = endMin - startMin;
-  return Math.round((diff / 60) * 100) / 100;
+  return Math.max(0, endMin - startMin - 60);
+}
+
+/** 残業時間を計算（勤務時間 - 8時間、分数で返す） */
+function calculateOvertimeMinutes(workMinutes) {
+  return Math.max(0, workMinutes - 480);
+}
+
+/** 分数 → H:MM 形式の文字列 */
+function minutesToHMM(minutes) {
+  const h = Math.floor(minutes / 60);
+  const m = String(minutes % 60).padStart(2, '0');
+  return `${h}:${m}`;
 }
 
 // ── Notion操作 ──────────────────────────────────────────
@@ -136,7 +147,8 @@ async function recordClockIn(discordId, displayName) {
 async function recordClockOut(pageId, startTime) {
   const currentTime = now();
   const endTimeStr = toTimeString(currentTime);
-  const workHours = calculateWorkHours(startTime, endTimeStr);
+  const workMin = calculateWorkMinutes(startTime, endTimeStr);
+  const overtimeMin = calculateOvertimeMinutes(workMin);
 
   await notion.pages.update({
     page_id: pageId,
@@ -145,7 +157,10 @@ async function recordClockOut(pageId, startTime) {
         rich_text: [{ text: { content: endTimeStr } }],
       },
       '勤務時間': {
-        number: workHours,
+        rich_text: [{ text: { content: minutesToHMM(workMin) } }],
+      },
+      '残業時間': {
+        rich_text: [{ text: { content: minutesToHMM(overtimeMin) } }],
       },
       'ステータス': {
         select: { name: '退勤済' },
@@ -153,7 +168,7 @@ async function recordClockOut(pageId, startTime) {
     },
   });
 
-  return { time: endTimeStr, workHours };
+  return { time: endTimeStr, workMin, overtimeMin };
 }
 
 /** 勤怠を修正 */
@@ -175,7 +190,8 @@ async function correctRecord(discordId, dateStr, startTime, endTime) {
     },
   });
 
-  const workHours = calculateWorkHours(startTime, endTime);
+  const workMin = calculateWorkMinutes(startTime, endTime);
+  const overtimeMin = calculateOvertimeMinutes(workMin);
 
   if (response.results.length > 0) {
     // 既存レコードを更新
@@ -190,14 +206,17 @@ async function correctRecord(discordId, dateStr, startTime, endTime) {
           rich_text: [{ text: { content: endTime } }],
         },
         '勤務時間': {
-          number: workHours,
+          rich_text: [{ text: { content: minutesToHMM(workMin) } }],
+        },
+        '残業時間': {
+          rich_text: [{ text: { content: minutesToHMM(overtimeMin) } }],
         },
         'ステータス': {
           select: { name: '修正済' },
         },
       },
     });
-    return { updated: true, workHours };
+    return { updated: true, workMin, overtimeMin };
   } else {
     return { updated: false };
   }
@@ -232,7 +251,8 @@ async function getMonthlyStats(discordId, year, month) {
   });
 
   const records = response.results;
-  let totalHours = 0;
+  let totalWorkMin = 0;
+  let totalOvertimeMin = 0;
   let workDays = 0;
 
   const details = records.map((record) => {
@@ -240,20 +260,21 @@ async function getMonthlyStats(discordId, year, month) {
     const date = props['日付'].date?.start || '-';
     const start = props['出勤時刻'].rich_text?.[0]?.plain_text || '-';
     const end = props['退勤時刻'].rich_text?.[0]?.plain_text || '-';
-    const hours = props['勤務時間'].number || 0;
+    const workTime = props['勤務時間'].rich_text?.[0]?.plain_text || '-';
+    const overtime = props['残業時間'].rich_text?.[0]?.plain_text || '0:00';
     const status = props['ステータス'].select?.name || '-';
 
-    if (hours > 0) {
-      totalHours += hours;
+    if (start !== '-' && end !== '-') {
+      const wMin = calculateWorkMinutes(start, end);
+      totalWorkMin += wMin;
+      totalOvertimeMin += calculateOvertimeMinutes(wMin);
       workDays++;
     }
 
-    return { date, start, end, hours, status };
+    return { date, start, end, workTime, overtime, status };
   });
 
-  const avgHours = workDays > 0 ? Math.round((totalHours / workDays) * 100) / 100 : 0;
-
-  return { details, totalHours: Math.round(totalHours * 100) / 100, workDays, avgHours };
+  return { details, totalWorkMin, totalOvertimeMin, workDays };
 }
 
 // ── スラッシュコマンド登録 ───────────────────────────────
@@ -468,7 +489,8 @@ discord.on('interactionCreate', async (interaction) => {
             .setColor(0xed4245)
             .addFields(
               { name: '退勤時刻', value: result.time, inline: true },
-              { name: '勤務時間', value: `${result.workHours}時間`, inline: true }
+              { name: '勤務時間', value: minutesToHMM(result.workMin), inline: true },
+              { name: '残業時間', value: minutesToHMM(result.overtimeMin), inline: true }
             )
             .setFooter({ text: `${displayName}` })
             .setTimestamp();
@@ -511,7 +533,8 @@ discord.on('interactionCreate', async (interaction) => {
             { name: '日付', value: dateStr, inline: true },
             { name: '出勤時刻', value: startTime, inline: true },
             { name: '退勤時刻', value: endTime, inline: true },
-            { name: '勤務時間', value: `${result.workHours}時間`, inline: true }
+            { name: '勤務時間', value: minutesToHMM(result.workMin), inline: true },
+            { name: '残業時間', value: minutesToHMM(result.overtimeMin), inline: true }
           );
         await interaction.editReply({ embeds: [embed] });
       } else {
@@ -553,7 +576,8 @@ discord.on('interactionCreate', async (interaction) => {
         const status = props['ステータス'].select?.name || '-';
         const start = props['出勤時刻'].rich_text?.[0]?.plain_text || '-';
         const end = props['退勤時刻'].rich_text?.[0]?.plain_text || '-';
-        const hours = props['勤務時間'].number;
+        const workTime = props['勤務時間'].rich_text?.[0]?.plain_text;
+        const overtime = props['残業時間'].rich_text?.[0]?.plain_text;
 
         const statusEmoji = status === '勤務中' ? '🟢' : status === '退勤済' ? '🔴' : '🟡';
 
@@ -566,8 +590,11 @@ discord.on('interactionCreate', async (interaction) => {
             { name: '退勤時刻', value: end, inline: true }
           );
 
-        if (hours !== null && hours !== undefined) {
-          embed.addFields({ name: '勤務時間', value: `${hours}時間`, inline: true });
+        if (workTime) {
+          embed.addFields(
+            { name: '勤務時間', value: workTime, inline: true },
+            { name: '残業時間', value: overtime || '0:00', inline: true }
+          );
         }
 
         await interaction.editReply({ embeds: [embed] });
@@ -602,7 +629,8 @@ discord.on('interactionCreate', async (interaction) => {
               { name: '日付', value: dateStr, inline: true },
               { name: '出勤時刻', value: startTime, inline: true },
               { name: '退勤時刻', value: endTime, inline: true },
-              { name: '勤務時間', value: `${result.workHours}時間`, inline: true }
+              { name: '勤務時間', value: minutesToHMM(result.workMin), inline: true },
+              { name: '残業時間', value: minutesToHMM(result.overtimeMin), inline: true }
             );
           await interaction.editReply({ embeds: [embed] });
         } else {
@@ -630,7 +658,8 @@ discord.on('interactionCreate', async (interaction) => {
         // 詳細テーブル
         let detailLines = stats.details.map((d) => {
           const dateShort = d.date.slice(5); // MM-DD
-          return `\`${dateShort}\` ${d.start} - ${d.end}  **${d.hours}h**  ${d.status === '修正済' ? '(修正)' : ''}`;
+          const ot = d.overtime !== '0:00' ? ` (残業 ${d.overtime})` : '';
+          return `\`${dateShort}\` ${d.start} - ${d.end}  **${d.workTime}**${ot}  ${d.status === '修正済' ? '(修正)' : ''}`;
         });
 
         const embed = new EmbedBuilder()
@@ -639,8 +668,8 @@ discord.on('interactionCreate', async (interaction) => {
           .setDescription(detailLines.join('\n'))
           .addFields(
             { name: '出勤日数', value: `${stats.workDays}日`, inline: true },
-            { name: '総勤務時間', value: `${stats.totalHours}時間`, inline: true },
-            { name: '平均勤務時間', value: `${stats.avgHours}時間/日`, inline: true }
+            { name: '総勤務時間', value: minutesToHMM(stats.totalWorkMin), inline: true },
+            { name: '総残業時間', value: minutesToHMM(stats.totalOvertimeMin), inline: true }
           )
           .setFooter({ text: `${interaction.user.displayName} の集計` });
 
