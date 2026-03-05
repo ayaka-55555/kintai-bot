@@ -346,8 +346,12 @@ function createPanel() {
       .setLabel('🟡 修正')
       .setStyle(ButtonStyle.Secondary),
     new ButtonBuilder()
-      .setCustomId('reset')
-      .setLabel('⬜ 取消')
+      .setCustomId('reset_in')
+      .setLabel('出勤取消')
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId('reset_out')
+      .setLabel('退勤取消')
       .setStyle(ButtonStyle.Secondary)
   );
 
@@ -501,12 +505,13 @@ discord.on('interactionCreate', async (interaction) => {
 
           await interaction.editReply({ embeds: [embed] });
 
-        } else if (interaction.customId === 'reset') {
+        } else if (interaction.customId === 'reset_in') {
+          // 出勤取消 → レコードごと削除
           const existing = await findTodayRecord(discordId);
 
           if (!existing) {
             await interaction.editReply({
-              content: '⚠️ 本日の打刻記録がありません。',
+              content: '⚠️ 本日の出勤記録がありません。',
             });
             return;
           }
@@ -517,9 +522,47 @@ discord.on('interactionCreate', async (interaction) => {
           });
 
           const embed = new EmbedBuilder()
-            .setTitle('✅ 本日の打刻を取り消しました')
+            .setTitle('✅ 出勤を取り消しました')
             .setColor(0x95a5a6)
-            .setDescription('出勤・退勤の記録がリセットされました。')
+            .setDescription('本日の記録がリセットされました。再度出勤できます。')
+            .setFooter({ text: `${displayName}` })
+            .setTimestamp();
+
+          await interaction.editReply({ embeds: [embed] });
+
+        } else if (interaction.customId === 'reset_out') {
+          // 退勤取消 → 退勤時刻・勤務時間・残業時間をクリア、ステータスを勤務中に戻す
+          const existing = await findTodayRecord(discordId);
+
+          if (!existing) {
+            await interaction.editReply({
+              content: '⚠️ 本日の出勤記録がありません。',
+            });
+            return;
+          }
+
+          const status = existing.properties['ステータス'].select?.name;
+          if (status === '勤務中') {
+            await interaction.editReply({
+              content: '⚠️ まだ退勤していません。',
+            });
+            return;
+          }
+
+          await notion.pages.update({
+            page_id: existing.id,
+            properties: {
+              '退勤時刻': { rich_text: [] },
+              '勤務時間': { rich_text: [] },
+              '残業時間': { rich_text: [] },
+              'ステータス': { select: { name: '勤務中' } },
+            },
+          });
+
+          const embed = new EmbedBuilder()
+            .setTitle('✅ 退勤を取り消しました')
+            .setColor(0x95a5a6)
+            .setDescription('退勤記録がリセットされました。再度退勤できます。')
             .setFooter({ text: `${displayName}` })
             .setTimestamp();
 
