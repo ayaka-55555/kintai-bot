@@ -36,7 +36,7 @@ const TIMEZONE = process.env.TIMEZONE || 'Asia/Tokyo';
 
 // ── クライアント初期化 ──────────────────────────────────
 const discord = new DiscordClient({
-  intents: [GatewayIntentBits.Guilds],
+  intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages],
 });
 
 const notion = new NotionClient({ auth: NOTION_API_KEY });
@@ -403,82 +403,82 @@ discord.on('interactionCreate', async (interaction) => {
       const discordId = interaction.user.id;
       const displayName = interaction.member?.displayName || interaction.user.displayName;
 
-      if (interaction.customId === 'clock_in') {
-        // 出勤ボタン
-        const existing = await findTodayRecord(discordId);
+      try {
+        if (interaction.customId === 'clock_in') {
+          const existing = await findTodayRecord(discordId);
 
-        if (existing) {
-          const status = existing.properties['ステータス'].select?.name;
-          if (status === '勤務中') {
+          if (existing) {
+            const status = existing.properties['ステータス'].select?.name;
+            if (status === '勤務中') {
+              await interaction.editReply({
+                content: '⚠️ 既に出勤済みです。退勤ボタンを押してから再度出勤してください。',
+              });
+              return;
+            }
+            if (status === '退勤済' || status === '修正済') {
+              await interaction.editReply({
+                content: '⚠️ 本日は既に出勤・退勤が記録されています。修正が必要な場合は修正ボタンを使用してください。',
+              });
+              return;
+            }
+          }
+
+          const result = await recordClockIn(discordId, displayName);
+          const embed = new EmbedBuilder()
+            .setTitle('✅ 出勤を記録しました')
+            .setColor(0x57f287)
+            .addFields(
+              { name: '日付', value: result.date, inline: true },
+              { name: '出勤時刻', value: result.time, inline: true }
+            )
+            .setFooter({ text: `${displayName}` })
+            .setTimestamp();
+
+          await interaction.editReply({ embeds: [embed] });
+
+        } else if (interaction.customId === 'clock_out') {
+          const existing = await findTodayRecord(discordId);
+
+          if (!existing) {
             await interaction.editReply({
-              content: '⚠️ 既に出勤済みです。退勤ボタンを押してから再度出勤してください。',
+              content: '⚠️ 本日の出勤記録がありません。先に出勤ボタンを押してください。',
             });
             return;
           }
+
+          const status = existing.properties['ステータス'].select?.name;
           if (status === '退勤済' || status === '修正済') {
             await interaction.editReply({
-              content: '⚠️ 本日は既に出勤・退勤が記録されています。修正が必要な場合は `/修正` コマンドを使用してください。',
+              content: '⚠️ 本日は既に退勤済みです。修正が必要な場合は修正ボタンを使用してください。',
             });
             return;
           }
+
+          const startTime = existing.properties['出勤時刻'].rich_text?.[0]?.plain_text;
+          if (!startTime) {
+            await interaction.editReply({
+              content: '❌ 出勤時刻の取得に失敗しました。管理者に連絡してください。',
+            });
+            return;
+          }
+
+          const result = await recordClockOut(existing.id, startTime);
+          const embed = new EmbedBuilder()
+            .setTitle('✅ 退勤を記録しました')
+            .setColor(0xed4245)
+            .addFields(
+              { name: '退勤時刻', value: result.time, inline: true },
+              { name: '勤務時間', value: `${result.workHours}時間`, inline: true }
+            )
+            .setFooter({ text: `${displayName}` })
+            .setTimestamp();
+
+          await interaction.editReply({ embeds: [embed] });
         }
-
-        const result = await recordClockIn(discordId, displayName);
-        const embed = new EmbedBuilder()
-          .setTitle('✅ 出勤を記録しました')
-          .setColor(0x57f287)
-          .addFields(
-            { name: '日付', value: result.date, inline: true },
-            { name: '出勤時刻', value: result.time, inline: true }
-          )
-          .setFooter({ text: `${displayName}` })
-          .setTimestamp();
-
-        await interaction.editReply({ embeds: [embed] });
-
-      } else if (interaction.customId === 'clock_out') {
-        // 退勤ボタン
-        const existing = await findTodayRecord(discordId);
-
-        if (!existing) {
-          await interaction.editReply({
-            content: '⚠️ 本日の出勤記録がありません。先に出勤ボタンを押してください。',
-          });
-          return;
-        }
-
-        const status = existing.properties['ステータス'].select?.name;
-        if (status === '退勤済' || status === '修正済') {
-          await interaction.editReply({
-            content: '⚠️ 本日は既に退勤済みです。修正が必要な場合は `/修正` コマンドを使用してください。',
-          });
-          return;
-        }
-
-        const startTime = existing.properties['出勤時刻'].rich_text?.[0]?.plain_text;
-        if (!startTime) {
-          await interaction.editReply({
-            content: '❌ 出勤時刻の取得に失敗しました。管理者に連絡してください。',
-          });
-          return;
-        }
-
-        const result = await recordClockOut(existing.id, startTime);
-        const embed = new EmbedBuilder()
-          .setTitle('✅ 退勤を記録しました')
-          .setColor(0xed4245)
-          .addFields(
-            { name: '退勤時刻', value: result.time, inline: true },
-            { name: '勤務時間', value: `${result.workHours}時間`, inline: true }
-          )
-          .setFooter({ text: `${displayName}` })
-          .setTimestamp();
-
-        await interaction.editReply({ embeds: [embed] });
+      } finally {
+        // エラー時・正常時どちらでもパネルを最下部に再投稿
+        await refreshPanel(interaction.channel).catch(() => {});
       }
-
-      // ボタン操作後にパネルを最下部に再投稿
-      await refreshPanel(interaction.channel);
     }
 
     // ── モーダル送信 ──
@@ -659,6 +659,15 @@ discord.on('interactionCreate', async (interaction) => {
       ephemeral: true,
     }).catch(() => {});
   }
+});
+
+// ── パネル自動再投稿（他のメッセージでパネルが流れた場合） ──
+discord.on('messageCreate', async (message) => {
+  // Bot自身のメッセージ、またはパネルが無いチャンネルは無視
+  if (message.author.bot) return;
+  if (message.channel.id !== panelChannelId) return;
+
+  await refreshPanel(message.channel).catch(() => {});
 });
 
 // ── Bot起動 ─────────────────────────────────────────────
