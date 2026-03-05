@@ -329,6 +329,27 @@ function createPanel() {
   return { embeds: [embed], components: [row] };
 }
 
+// ── パネル管理 ───────────────────────────────────────────
+
+/** パネルメッセージの参照を保持 */
+let panelChannelId = null;
+let panelMessageId = null;
+
+/** パネルを再投稿して最下部に固定 */
+async function refreshPanel(channel) {
+  // 古いパネルを削除
+  if (panelMessageId && panelChannelId === channel.id) {
+    try {
+      const oldMsg = await channel.messages.fetch(panelMessageId);
+      await oldMsg.delete();
+    } catch (_) { /* 既に削除済みなら無視 */ }
+  }
+  // 新しいパネルを投稿
+  const msg = await channel.send(createPanel());
+  panelChannelId = channel.id;
+  panelMessageId = msg.id;
+}
+
 // ── イベントハンドラ ────────────────────────────────────
 
 discord.once('ready', async () => {
@@ -455,6 +476,9 @@ discord.on('interactionCreate', async (interaction) => {
 
         await interaction.editReply({ embeds: [embed] });
       }
+
+      // ボタン操作後にパネルを最下部に再投稿
+      await refreshPanel(interaction.channel);
     }
 
     // ── モーダル送信 ──
@@ -495,6 +519,9 @@ discord.on('interactionCreate', async (interaction) => {
           content: `❌ ${dateStr} の勤怠記録が見つかりませんでした。`,
         });
       }
+
+      // モーダル送信後にパネルを最下部に再投稿
+      await refreshPanel(interaction.channel);
     }
 
     // ── スラッシュコマンド ──
@@ -502,7 +529,16 @@ discord.on('interactionCreate', async (interaction) => {
       const { commandName } = interaction;
 
       if (commandName === 'panel') {
-        await interaction.reply(createPanel());
+        // 既存パネルがあれば削除
+        if (panelMessageId && panelChannelId === interaction.channel.id) {
+          try {
+            const oldMsg = await interaction.channel.messages.fetch(panelMessageId);
+            await oldMsg.delete();
+          } catch (_) { /* 無視 */ }
+        }
+        const reply = await interaction.reply({ ...createPanel(), fetchReply: true });
+        panelChannelId = interaction.channel.id;
+        panelMessageId = reply.id;
 
       } else if (commandName === '状態') {
         await interaction.deferReply({ ephemeral: true });
