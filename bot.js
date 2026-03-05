@@ -7,9 +7,6 @@
  * - /修正 : 勤怠データを修正
  * - /集計 : 月次勤怠集計を表示
  * - ボタン操作で出勤・退勤をNotionに記録
- *
- * スマホ・PCどちらからでも、サーバー内の誰でも利用可能です。
- * 24時間利用するにはクラウドへデプロイしてください（DEPLOY.md 参照）。
  */
 
 require('dotenv').config();
@@ -76,29 +73,33 @@ function timeToMinutes(timeStr) {
 function calculateWorkHours(startTime, endTime) {
   const startMin = timeToMinutes(startTime);
   const endMin = timeToMinutes(endTime);
-  const diff = endMin - startMin - 60; // 休憩1時間を控除
-  return Math.max(0, Math.round((diff / 60) * 100) / 100);
+  const diff = endMin - startMin;
+  return Math.round((diff / 60) * 100) / 100;
 }
 
 // ── Notion操作 ──────────────────────────────────────────
 
-/** 指定日のユーザーレコードを検索 */
-async function findRecordByDate(discordId, dateStr) {
+/** 今日のユーザーレコードを検索 */
+async function findTodayRecord(discordId) {
+  const today = toDateString(now());
+
   const response = await notion.databases.query({
     database_id: NOTION_DATABASE_ID,
     filter: {
       and: [
-        { property: 'Discord ID', rich_text: { equals: discordId } },
-        { property: '日付', date: { equals: dateStr } },
+        {
+          property: 'Discord ID',
+          rich_text: { equals: discordId },
+        },
+        {
+          property: '日付',
+          date: { equals: today },
+        },
       ],
     },
   });
-  return response.results.length > 0 ? response.results[0] : null;
-}
 
-/** 今日のユーザーレコードを検索 */
-async function findTodayRecord(discordId) {
-  return findRecordByDate(discordId, toDateString(now()));
+  return response.results.length > 0 ? response.results[0] : null;
 }
 
 /** 出勤を記録 */
@@ -155,51 +156,51 @@ async function recordClockOut(pageId, startTime) {
   return { time: endTimeStr, workHours };
 }
 
-/** 勤怠を修正（出勤・退勤両方指定） */
+/** 勤怠を修正 */
 async function correctRecord(discordId, dateStr, startTime, endTime) {
-  const record = await findRecordByDate(discordId, dateStr);
-  if (!record) return { updated: false };
-
-  const workHours = calculateWorkHours(startTime, endTime);
-  await notion.pages.update({
-    page_id: record.id,
-    properties: {
-      '出勤時刻': { rich_text: [{ text: { content: startTime } }] },
-      '退勤時刻': { rich_text: [{ text: { content: endTime } }] },
-      '勤務時間': { number: workHours },
-      'ステータス': { select: { name: '修正済' } },
+  // 該当日のレコードを検索
+  const response = await notion.databases.query({
+    database_id: NOTION_DATABASE_ID,
+    filter: {
+      and: [
+        {
+          property: 'Discord ID',
+          rich_text: { equals: discordId },
+        },
+        {
+          property: '日付',
+          date: { equals: dateStr },
+        },
+      ],
     },
   });
-  return { updated: true, workHours };
-}
 
-/** 勤怠を部分修正（変更したい項目だけ指定可能） */
-async function correctRecordPartial(discordId, dateStr, { startTime, endTime }) {
-  const record = await findRecordByDate(discordId, dateStr);
-  if (!record) return { updated: false, error: 'not_found' };
+  const workHours = calculateWorkHours(startTime, endTime);
 
-  const props = record.properties;
-  const currentStart = props['出勤時刻'].rich_text?.[0]?.plain_text || '';
-  const currentEnd = props['退勤時刻'].rich_text?.[0]?.plain_text || '';
-
-  const newStart = startTime !== undefined && startTime !== '' ? startTime : currentStart;
-  const newEnd = endTime !== undefined && endTime !== '' ? endTime : currentEnd;
-
-  const workHours = newStart && newEnd ? calculateWorkHours(newStart, newEnd) : (record.properties['勤務時間'].number ?? 0);
-
-  const updateProps = {
-    'ステータス': { select: { name: '修正済' } },
-  };
-  if (newStart) updateProps['出勤時刻'] = { rich_text: [{ text: { content: newStart } }] };
-  if (newEnd) updateProps['退勤時刻'] = { rich_text: [{ text: { content: newEnd } }] };
-  if (newStart && newEnd) updateProps['勤務時間'] = { number: workHours };
-
-  await notion.pages.update({
-    page_id: record.id,
-    properties: updateProps,
-  });
-
-  return { updated: true, workHours: newStart && newEnd ? workHours : undefined, newStart, newEnd };
+  if (response.results.length > 0) {
+    // 既存レコードを更新
+    const pageId = response.results[0].id;
+    await notion.pages.update({
+      page_id: pageId,
+      properties: {
+        '出勤時刻': {
+          rich_text: [{ text: { content: startTime } }],
+        },
+        '退勤時刻': {
+          rich_text: [{ text: { content: endTime } }],
+        },
+        '勤務時間': {
+          number: workHours,
+        },
+        'ステータス': {
+          select: { name: '修正済' },
+        },
+      },
+    });
+    return { updated: true, workHours };
+  } else {
+    return { updated: false };
+  }
 }
 
 /** 月次集計を取得 */
@@ -306,14 +307,11 @@ async function registerCommands() {
 function createPanel() {
   const embed = new EmbedBuilder()
     .setTitle('🕐 勤怠管理')
-    .setDescription(
-      'ボタンを押して出勤・退勤を記録してください。\n' +
-      '📱 スマホ・PCどちらからでも、サーバーのメンバーなら誰でも利用できます。'
-    )
+    .setDescription('ボタンを押して出勤・退勤を記録してください。')
     .setColor(0x5865f2)
     .setFooter({ text: '打刻データはNotionに自動保存されます' });
 
-  const row1 = new ActionRowBuilder().addComponents(
+  const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId('clock_in')
       .setLabel('🟢 出勤')
@@ -321,60 +319,14 @@ function createPanel() {
     new ButtonBuilder()
       .setCustomId('clock_out')
       .setLabel('🔴 退勤')
-      .setStyle(ButtonStyle.Danger)
-  );
-  const row2 = new ActionRowBuilder().addComponents(
+      .setStyle(ButtonStyle.Danger),
     new ButtonBuilder()
       .setCustomId('correct')
-      .setLabel('修正')
+      .setLabel('🟡 修正')
       .setStyle(ButtonStyle.Secondary)
   );
 
-  return { embeds: [embed], components: [row1, row2] };
-}
-
-/** 修正用モーダルを作成（mode: 'start' | 'end' | 'both'） */
-function buildCorrectModal(mode) {
-  const today = toDateString(now());
-  const modal = new ModalBuilder()
-    .setCustomId(`correct_modal_${mode}`)
-    .setTitle('勤怠を修正');
-
-  const dateInput = new TextInputBuilder()
-    .setCustomId('correct_date')
-    .setLabel('日付')
-    .setStyle(TextInputStyle.Short)
-    .setPlaceholder('YYYY-MM-DD')
-    .setValue(today)
-    .setRequired(true)
-    .setMinLength(10)
-    .setMaxLength(10);
-  modal.addComponents(new ActionRowBuilder().addComponents(dateInput));
-
-  if (mode === 'start' || mode === 'both') {
-    const startInput = new TextInputBuilder()
-      .setCustomId('correct_start')
-      .setLabel('出勤時刻')
-      .setStyle(TextInputStyle.Short)
-      .setPlaceholder('HH:MM 例: 09:00')
-      .setRequired(true)
-      .setMinLength(5)
-      .setMaxLength(5);
-    modal.addComponents(new ActionRowBuilder().addComponents(startInput));
-  }
-  if (mode === 'end' || mode === 'both') {
-    const endInput = new TextInputBuilder()
-      .setCustomId('correct_end')
-      .setLabel('退勤時刻')
-      .setStyle(TextInputStyle.Short)
-      .setPlaceholder('HH:MM 例: 18:00')
-      .setRequired(true)
-      .setMinLength(5)
-      .setMaxLength(5);
-    modal.addComponents(new ActionRowBuilder().addComponents(endInput));
-  }
-
-  return modal;
+  return { embeds: [embed], components: [row] };
 }
 
 // ── イベントハンドラ ────────────────────────────────────
@@ -386,135 +338,12 @@ discord.once('ready', async () => {
 
 discord.on('interactionCreate', async (interaction) => {
   try {
-    // ── 修正の「何を修正するか」選択ボタン（モーダル表示のため defer しない）──
-    if (interaction.isButton() && interaction.customId.startsWith('correct_choice_')) {
-      const mode = interaction.customId.replace('correct_choice_', '');
-      await interaction.showModal(buildCorrectModal(mode));
-      return;
-    }
-
-    // ── モーダル送信（修正内容の反映）──
-    if (interaction.isModalSubmit() && interaction.customId.startsWith('correct_modal_')) {
-      const mode = interaction.customId.replace('correct_modal_', '');
-      const dateStr = interaction.fields.getTextInputValue('correct_date').trim();
-      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
-      const timeRegex = /^\d{2}:\d{2}$/;
-
-      if (!dateRegex.test(dateStr)) {
-        await interaction.reply({
-          content: '❌ 日付は YYYY-MM-DD で入力してください。',
-          ephemeral: true,
-        });
-        return;
-      }
-
-      const discordId = interaction.user.id;
-
-      if (mode === 'start') {
-        const startTime = interaction.fields.getTextInputValue('correct_start').trim();
-        if (!timeRegex.test(startTime)) {
-          await interaction.reply({ content: '❌ 出勤時刻は HH:MM で入力してください。', ephemeral: true });
-          return;
-        }
-        await interaction.deferReply({ ephemeral: true });
-        const result = await correctRecordPartial(discordId, dateStr, { startTime });
-        if (!result.updated) {
-          await interaction.editReply({ content: `❌ ${dateStr} の勤怠記録が見つかりませんでした。` });
-          return;
-        }
-        const embed = new EmbedBuilder()
-          .setTitle('✅ 出勤時刻を修正しました')
-          .setColor(0xfee75c)
-          .addFields(
-            { name: '日付', value: dateStr, inline: true },
-            { name: '出勤時刻', value: startTime, inline: true }
-          );
-        await interaction.editReply({ embeds: [embed] });
-        return;
-      }
-
-      if (mode === 'end') {
-        const endTime = interaction.fields.getTextInputValue('correct_end').trim();
-        if (!timeRegex.test(endTime)) {
-          await interaction.reply({ content: '❌ 退勤時刻は HH:MM で入力してください。', ephemeral: true });
-          return;
-        }
-        await interaction.deferReply({ ephemeral: true });
-        const result = await correctRecordPartial(discordId, dateStr, { endTime });
-        if (!result.updated) {
-          await interaction.editReply({ content: `❌ ${dateStr} の勤怠記録が見つかりませんでした。` });
-          return;
-        }
-        const embed = new EmbedBuilder()
-          .setTitle('✅ 退勤時刻を修正しました')
-          .setColor(0xfee75c)
-          .addFields(
-            { name: '日付', value: dateStr, inline: true },
-            { name: '退勤時刻', value: endTime, inline: true },
-            ...(result.workHours !== undefined ? [{ name: '勤務時間', value: `${result.workHours}時間 (休憩1h控除)`, inline: true }] : [])
-          );
-        await interaction.editReply({ embeds: [embed] });
-        return;
-      }
-
-      if (mode === 'both') {
-        const startTime = interaction.fields.getTextInputValue('correct_start').trim();
-        const endTime = interaction.fields.getTextInputValue('correct_end').trim();
-        if (!timeRegex.test(startTime) || !timeRegex.test(endTime)) {
-          await interaction.reply({
-            content: '❌ 出勤・退勤時刻は HH:MM で入力してください。',
-            ephemeral: true,
-          });
-          return;
-        }
-        await interaction.deferReply({ ephemeral: true });
-        const result = await correctRecord(discordId, dateStr, startTime, endTime);
-        if (!result.updated) {
-          await interaction.editReply({ content: `❌ ${dateStr} の勤怠記録が見つかりませんでした。` });
-          return;
-        }
-        const embed = new EmbedBuilder()
-          .setTitle('✅ 勤怠を修正しました')
-          .setColor(0xfee75c)
-          .addFields(
-            { name: '日付', value: dateStr, inline: true },
-            { name: '出勤時刻', value: startTime, inline: true },
-            { name: '退勤時刻', value: endTime, inline: true },
-            { name: '勤務時間', value: `${result.workHours}時間 (休憩1h控除)`, inline: true }
-          );
-        await interaction.editReply({ embeds: [embed] });
-        return;
-      }
-    }
-
     // ── ボタン操作 ──
     if (interaction.isButton()) {
       await interaction.deferReply({ ephemeral: true });
 
       const discordId = interaction.user.id;
       const displayName = interaction.member?.displayName || interaction.user.displayName;
-
-      if (interaction.customId === 'correct') {
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId('correct_choice_start')
-            .setLabel('出勤時刻だけ')
-            .setStyle(ButtonStyle.Primary),
-          new ButtonBuilder()
-            .setCustomId('correct_choice_end')
-            .setLabel('退勤時刻だけ')
-            .setStyle(ButtonStyle.Primary),
-          new ButtonBuilder()
-            .setCustomId('correct_choice_both')
-            .setLabel('両方')
-            .setStyle(ButtonStyle.Primary)
-        );
-        await interaction.editReply({
-          content: '📝 **何を修正しますか？** 変更したい項目だけ選んでください。',
-          components: [row],
-        });
-        return;
-      }
 
       if (interaction.customId === 'clock_in') {
         // 出勤ボタン
@@ -530,7 +359,7 @@ discord.on('interactionCreate', async (interaction) => {
           }
           if (status === '退勤済' || status === '修正済') {
             await interaction.editReply({
-              content: '⚠️ 本日は既に出勤・退勤が記録されています。修正が必要な場合は「修正」ボタンを使用してください。',
+              content: '⚠️ 本日は既に出勤・退勤が記録されています。修正が必要な場合は `/修正` コマンドを使用してください。',
             });
             return;
           }
@@ -563,7 +392,7 @@ discord.on('interactionCreate', async (interaction) => {
         const status = existing.properties['ステータス'].select?.name;
         if (status === '退勤済' || status === '修正済') {
           await interaction.editReply({
-            content: '⚠️ 本日は既に退勤済みです。修正が必要な場合は「修正」ボタンを使用してください。',
+            content: '⚠️ 本日は既に退勤済みです。修正が必要な場合は `/修正` コマンドを使用してください。',
           });
           return;
         }
@@ -582,12 +411,87 @@ discord.on('interactionCreate', async (interaction) => {
           .setColor(0xed4245)
           .addFields(
             { name: '退勤時刻', value: result.time, inline: true },
-            { name: '勤務時間', value: `${result.workHours}時間 (休憩1h控除)`, inline: true }
+            { name: '勤務時間', value: `${result.workHours}時間`, inline: true }
           )
           .setFooter({ text: `${displayName}` })
           .setTimestamp();
 
         await interaction.editReply({ embeds: [embed] });
+
+      } else if (interaction.customId === 'correct') {
+        // 修正ボタン → モーダルを表示
+        const modal = new ModalBuilder()
+          .setCustomId('correct_modal')
+          .setTitle('勤怠修正');
+
+        const dateInput = new TextInputBuilder()
+          .setCustomId('correct_date')
+          .setLabel('日付（YYYY-MM-DD）')
+          .setPlaceholder(toDateString(now()))
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true);
+
+        const startInput = new TextInputBuilder()
+          .setCustomId('correct_start')
+          .setLabel('出勤時刻（HH:MM）')
+          .setPlaceholder('09:00')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true);
+
+        const endInput = new TextInputBuilder()
+          .setCustomId('correct_end')
+          .setLabel('退勤時刻（HH:MM）')
+          .setPlaceholder('18:00')
+          .setStyle(TextInputStyle.Short)
+          .setRequired(true);
+
+        modal.addComponents(
+          new ActionRowBuilder().addComponents(dateInput),
+          new ActionRowBuilder().addComponents(startInput),
+          new ActionRowBuilder().addComponents(endInput)
+        );
+
+        await interaction.showModal(modal);
+      }
+    }
+
+    // ── モーダル送信 ──
+    if (interaction.isModalSubmit() && interaction.customId === 'correct_modal') {
+      await interaction.deferReply({ ephemeral: true });
+
+      const dateStr = interaction.fields.getTextInputValue('correct_date');
+      const startTime = interaction.fields.getTextInputValue('correct_start');
+      const endTime = interaction.fields.getTextInputValue('correct_end');
+
+      const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+      const timeRegex = /^\d{2}:\d{2}$/;
+
+      if (!dateRegex.test(dateStr)) {
+        await interaction.editReply({ content: '❌ 日付の形式が正しくありません。YYYY-MM-DD で入力してください。' });
+        return;
+      }
+      if (!timeRegex.test(startTime) || !timeRegex.test(endTime)) {
+        await interaction.editReply({ content: '❌ 時刻の形式が正しくありません。HH:MM で入力してください。' });
+        return;
+      }
+
+      const result = await correctRecord(interaction.user.id, dateStr, startTime, endTime);
+
+      if (result.updated) {
+        const embed = new EmbedBuilder()
+          .setTitle('✅ 勤怠を修正しました')
+          .setColor(0xfee75c)
+          .addFields(
+            { name: '日付', value: dateStr, inline: true },
+            { name: '出勤時刻', value: startTime, inline: true },
+            { name: '退勤時刻', value: endTime, inline: true },
+            { name: '勤務時間', value: `${result.workHours}時間`, inline: true }
+          );
+        await interaction.editReply({ embeds: [embed] });
+      } else {
+        await interaction.editReply({
+          content: `❌ ${dateStr} の勤怠記録が見つかりませんでした。`,
+        });
       }
     }
 
@@ -660,7 +564,7 @@ discord.on('interactionCreate', async (interaction) => {
               { name: '日付', value: dateStr, inline: true },
               { name: '出勤時刻', value: startTime, inline: true },
               { name: '退勤時刻', value: endTime, inline: true },
-              { name: '勤務時間', value: `${result.workHours}時間 (休憩1h控除)`, inline: true }
+              { name: '勤務時間', value: `${result.workHours}時間`, inline: true }
             );
           await interaction.editReply({ embeds: [embed] });
         } else {
@@ -717,18 +621,6 @@ discord.on('interactionCreate', async (interaction) => {
       ephemeral: true,
     }).catch(() => {});
   }
-});
-
-// ── プロセスエラー処理（24/7運用時の安定化）──────────────
-process.on('uncaughtException', (err) => {
-  console.error('uncaughtException:', err);
-});
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('unhandledRejection:', reason);
-});
-
-discord.on('error', (err) => {
-  console.error('Discord client error:', err);
 });
 
 // ── Bot起動 ─────────────────────────────────────────────
