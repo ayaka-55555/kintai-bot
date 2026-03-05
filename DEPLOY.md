@@ -2,6 +2,26 @@
 
 PC を起動していないときも Discord から勤怠入力できるようにするには、**Bot をクラウドで常時稼働**させます。
 
+## ステップ0: GitHub にプッシュ（すでに Git 初期化・初回コミット済み）
+
+1. **GitHub でリポジトリを新規作成**
+   - https://github.com/new を開く
+   - リポジトリ名: `kintai-bot`（任意）
+   - Public / Private はどちらでも可
+   - **「Add a README」や .gitignore は追加しない**（既にローカルにあります）
+
+2. **リモートを追加してプッシュ**（`YOUR_GITHUB_USERNAME` を自分のユーザー名に置き換え）
+
+   ```bash
+   cd /Users/ayakagoto/Desktop/kintai-bot
+   git remote add origin https://github.com/YOUR_GITHUB_USERNAME/kintai-bot.git
+   git push -u origin main
+   ```
+
+   作成時に「SSH」のURLを選んだ場合は、そのURLを `origin` に指定してください。
+
+---
+
 ## 方法1: Railway でデプロイ（おすすめ）
 
 [Railway](https://railway.app/) の無料枠で Node アプリを常時稼働できます。
