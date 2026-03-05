@@ -344,6 +344,10 @@ function createPanel() {
     new ButtonBuilder()
       .setCustomId('correct')
       .setLabel('🟡 修正')
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId('reset')
+      .setLabel('⬜ 取消')
       .setStyle(ButtonStyle.Secondary)
   );
 
@@ -492,6 +496,30 @@ discord.on('interactionCreate', async (interaction) => {
               { name: '勤務時間', value: minutesToHMM(result.workMin), inline: true },
               { name: '残業時間', value: minutesToHMM(result.overtimeMin), inline: true }
             )
+            .setFooter({ text: `${displayName}` })
+            .setTimestamp();
+
+          await interaction.editReply({ embeds: [embed] });
+
+        } else if (interaction.customId === 'reset') {
+          const existing = await findTodayRecord(discordId);
+
+          if (!existing) {
+            await interaction.editReply({
+              content: '⚠️ 本日の打刻記録がありません。',
+            });
+            return;
+          }
+
+          await notion.pages.update({
+            page_id: existing.id,
+            archived: true,
+          });
+
+          const embed = new EmbedBuilder()
+            .setTitle('✅ 本日の打刻を取り消しました')
+            .setColor(0x95a5a6)
+            .setDescription('出勤・退勤の記録がリセットされました。')
             .setFooter({ text: `${displayName}` })
             .setTimestamp();
 
