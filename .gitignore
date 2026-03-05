@@ -1,0 +1,10 @@
+# 環境変数（絶対にGitに含めない）
+.env
+.env.local
+.env.*.local
+
+# 依存関係
+node_modules/
+
+# ログ
+*.log

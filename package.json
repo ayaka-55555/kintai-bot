@@ -1,0 +1,14 @@
+{
+  "name": "kintai-bot",
+  "version": "1.0.0",
+  "description": "Discord勤怠管理Bot - Notion連携",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "@notionhq/client": "^2.2.15",
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.5"
+  }
+}
