@@ -349,21 +349,21 @@ discord.on('interactionCreate', async (interaction) => {
         const dateInput = new TextInputBuilder()
           .setCustomId('correct_date')
           .setLabel('日付（YYYY-MM-DD）')
-          .setPlaceholder(toDateString(now()))
+          .setValue(toDateString(now()))
           .setStyle(TextInputStyle.Short)
           .setRequired(true);
 
         const startInput = new TextInputBuilder()
           .setCustomId('correct_start')
           .setLabel('出勤時刻（HH:MM）')
-          .setPlaceholder('09:00')
+          .setValue('09:00')
           .setStyle(TextInputStyle.Short)
           .setRequired(true);
 
         const endInput = new TextInputBuilder()
           .setCustomId('correct_end')
           .setLabel('退勤時刻（HH:MM）')
-          .setPlaceholder('18:00')
+          .setValue('18:00')
           .setStyle(TextInputStyle.Short)
           .setRequired(true);
 
